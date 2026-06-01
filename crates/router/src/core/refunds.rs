@@ -1553,6 +1553,125 @@ pub async fn refund_list(
     ))
 }
 
+// ********************************************** Platform refund list **********************************************
+
+/// Lists refunds for a platform merchant aggregated across all of its
+/// connected merchants.
+///
+/// - The caller must be a platform merchant; non-platform callers receive a
+///   structured `UnauthorizedToPerformOperation` error.
+/// - Aggregation: the platform's `organization_id` is used to find every
+///   merchant of type `Connected` in the org; refunds are then filtered by
+///   `refund.merchant_id IN (connected_merchant_ids)` using
+///   `filter_refunds_by_platform_merchant_id_for_listing`.
+/// - Response items are slim and PII-free: refund id, payment id, amount,
+///   currency, status, connector, connected merchant id, profile id, and
+///   timestamps. No customer PII, no refund reason text, no metadata blob.
+#[cfg(all(feature = "v1", feature = "olap"))]
+#[instrument(skip_all)]
+pub async fn refund_list_for_platform(
+    state: SessionState,
+    platform: domain::Platform,
+    profile_id_list: Option<Vec<common_utils::id_type::ProfileId>>,
+    req: api_models::refunds::RefundListRequest,
+) -> RouterResponse<api_models::refunds::PlatformRefundListResponse> {
+    let provider_account = platform.get_provider().get_account();
+
+    if !provider_account.is_platform_account() {
+        return Err(report!(errors::ApiErrorResponse::PlatformAccountAuthNotSupported)
+            .attach_printable(
+                "Aggregated platform refund listing is restricted to platform merchants",
+            ));
+    }
+
+    let db = &*state.store;
+
+    let connected_accounts = db
+        .list_merchant_accounts_by_organization_id(provider_account.get_org_id())
+        .await
+        .change_context(errors::ApiErrorResponse::InternalServerError)
+        .attach_printable("Failed to list merchant accounts for platform organization")?;
+
+    let connected_merchant_ids: Vec<common_utils::id_type::MerchantId> = connected_accounts
+        .iter()
+        .filter(|account| {
+            account.merchant_account_type == common_enums::MerchantAccountType::Connected
+        })
+        .map(|account| account.get_id().clone())
+        .collect();
+
+    if connected_merchant_ids.is_empty() {
+        return Ok(services::ApplicationResponse::Json(
+            api_models::refunds::PlatformRefundListResponse {
+                count: 0,
+                total_count: 0,
+                data: Vec::new(),
+            },
+        ));
+    }
+
+    let limit = validator::validate_refund_list(req.limit)?;
+    let offset = req.offset.unwrap_or_default();
+
+    let constraints: hyperswitch_domain_models::refunds::RefundListConstraints =
+        (req.clone(), profile_id_list.clone()).try_into()?;
+
+    let refunds = db
+        .filter_refunds_by_platform_merchant_id_for_listing(
+            &connected_merchant_ids,
+            &constraints,
+            provider_account.storage_scheme,
+            limit,
+            offset,
+        )
+        .await
+        .to_not_found_response(errors::ApiErrorResponse::RefundNotFound)?;
+
+    let connected_profile_ids: std::collections::HashSet<common_utils::id_type::ProfileId> =
+        connected_accounts
+            .iter()
+            .filter_map(|account| account.default_profile.clone())
+            .collect();
+
+    let data: Vec<api_models::refunds::PlatformRefundListItem> = refunds
+        .into_iter()
+        .map(|refund| api_models::refunds::PlatformRefundListItem {
+            refund_id: refund.refund_id,
+            payment_id: refund.payment_id,
+            amount: refund.refund_amount,
+            currency: refund.currency,
+            status: refund.refund_status,
+            connector: refund.connector,
+            connected_merchant_id: refund.merchant_id,
+            profile_id: refund.profile_id.filter(|profile_id| {
+                // Defensive: only surface profile ids that map to a connected
+                // merchant we already authorised against.
+                connected_profile_ids.is_empty() || connected_profile_ids.contains(profile_id)
+            }),
+            created_at: Some(refund.created_at),
+            updated_at: Some(refund.modified_at),
+        })
+        .collect();
+
+    let total_count = db
+        .get_total_count_of_refunds_by_platform_merchant_id(
+            &connected_merchant_ids,
+            &(req, profile_id_list).try_into()?,
+            provider_account.storage_scheme,
+        )
+        .await
+        .change_context(errors::ApiErrorResponse::InternalServerError)
+        .attach_printable("Failed to count aggregated platform refunds")?;
+
+    Ok(services::ApplicationResponse::Json(
+        api_models::refunds::PlatformRefundListResponse {
+            count: data.len(),
+            total_count,
+            data,
+        },
+    ))
+}
+
 #[instrument(skip_all)]
 #[cfg(feature = "olap")]
 pub async fn refund_filter_list(

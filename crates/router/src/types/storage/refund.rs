@@ -44,6 +44,26 @@ pub trait RefundDbExt: Sized {
         refund_list_details: &common_utils::types::TimeRange,
     ) -> CustomResult<api_models::refunds::RefundListMetaData, errors::DatabaseError>;
 
+    /// Filter refunds across the given connected merchant ids (the platform's
+    /// scope), applying the same list constraints as `filter_by_constraints`.
+    #[cfg(feature = "v1")]
+    async fn filter_by_platform_merchant_id(
+        conn: &PgPooledConn,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_list_details: &refunds::RefundListConstraints,
+        limit: i64,
+        offset: i64,
+    ) -> CustomResult<Vec<Self>, errors::DatabaseError>;
+
+    /// Count refunds across the given connected merchant ids (the platform's
+    /// scope), applying the same list constraints as `get_refunds_count`.
+    #[cfg(feature = "v1")]
+    async fn get_refunds_count_by_platform_merchant_id(
+        conn: &PgPooledConn,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_list_details: &refunds::RefundListConstraints,
+    ) -> CustomResult<i64, errors::DatabaseError>;
+
     #[cfg(feature = "v1")]
     async fn get_refunds_count(
         conn: &PgPooledConn,
@@ -323,6 +343,146 @@ impl RefundDbExt for Refund {
         };
 
         Ok(meta)
+    }
+
+    #[cfg(feature = "v1")]
+    async fn filter_by_platform_merchant_id(
+        conn: &PgPooledConn,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_list_details: &refunds::RefundListConstraints,
+        limit: i64,
+        offset: i64,
+    ) -> CustomResult<Vec<Self>, errors::DatabaseError> {
+        if connected_merchant_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut filter = <Self as HasTable>::table()
+            .filter(dsl::merchant_id.eq_any(connected_merchant_ids.to_owned()))
+            .order(dsl::modified_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .into_boxed();
+
+        if let Some(pid) = &refund_list_details.payment_id {
+            filter = filter.filter(dsl::payment_id.eq(pid.to_owned()));
+        }
+        if let Some(ref_id) = &refund_list_details.refund_id {
+            filter = filter.filter(dsl::refund_id.eq(ref_id.to_owned()));
+        }
+        if let Some(profile_ids) = &refund_list_details.profile_id {
+            filter = filter.filter(dsl::profile_id.eq_any(profile_ids.to_owned()));
+        }
+        if let Some(time_range) = refund_list_details.time_range {
+            filter = filter.filter(dsl::created_at.ge(time_range.start_time));
+            if let Some(end_time) = time_range.end_time {
+                filter = filter.filter(dsl::created_at.le(end_time));
+            }
+        }
+        filter = match refund_list_details.amount_filter {
+            Some(AmountFilter {
+                start_amount: Some(start),
+                end_amount: Some(end),
+            }) => filter.filter(dsl::refund_amount.between(start, end)),
+            Some(AmountFilter {
+                start_amount: Some(start),
+                end_amount: None,
+            }) => filter.filter(dsl::refund_amount.ge(start)),
+            Some(AmountFilter {
+                start_amount: None,
+                end_amount: Some(end),
+            }) => filter.filter(dsl::refund_amount.le(end)),
+            _ => filter,
+        };
+        if let Some(connector) = refund_list_details.connector.clone() {
+            filter = filter.filter(dsl::connector.eq_any(connector));
+        }
+        if let Some(merchant_connector_id) = refund_list_details.merchant_connector_id.clone() {
+            filter = filter.filter(dsl::merchant_connector_id.eq_any(merchant_connector_id));
+        }
+        if let Some(filter_currency) = &refund_list_details.currency {
+            filter = filter.filter(dsl::currency.eq_any(filter_currency.clone()));
+        }
+        if let Some(filter_refund_status) = &refund_list_details.refund_status {
+            filter = filter.filter(dsl::refund_status.eq_any(filter_refund_status.clone()));
+        }
+
+        logger::debug!(query = %diesel::debug_query::<diesel::pg::Pg, _>(&filter).to_string());
+
+        db_metrics::track_database_call::<<Self as HasTable>::Table, _, _>(
+            filter.get_results_async(conn),
+            db_metrics::DatabaseOperation::Filter,
+        )
+        .await
+        .change_context(errors::DatabaseError::NotFound)
+        .attach_printable_lazy(|| "Error filtering refunds by platform merchant id")
+    }
+
+    #[cfg(feature = "v1")]
+    async fn get_refunds_count_by_platform_merchant_id(
+        conn: &PgPooledConn,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_list_details: &refunds::RefundListConstraints,
+    ) -> CustomResult<i64, errors::DatabaseError> {
+        if connected_merchant_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut filter = <Self as HasTable>::table()
+            .count()
+            .filter(dsl::merchant_id.eq_any(connected_merchant_ids.to_owned()))
+            .into_boxed();
+
+        if let Some(pay_id) = &refund_list_details.payment_id {
+            filter = filter.filter(dsl::payment_id.eq(pay_id.to_owned()));
+        }
+        if let Some(ref_id) = &refund_list_details.refund_id {
+            filter = filter.filter(dsl::refund_id.eq(ref_id.to_owned()));
+        }
+        if let Some(profile_ids) = &refund_list_details.profile_id {
+            filter = filter.filter(dsl::profile_id.eq_any(profile_ids.to_owned()));
+        }
+        if let Some(time_range) = refund_list_details.time_range {
+            filter = filter.filter(dsl::created_at.ge(time_range.start_time));
+            if let Some(end_time) = time_range.end_time {
+                filter = filter.filter(dsl::created_at.le(end_time));
+            }
+        }
+        filter = match refund_list_details.amount_filter {
+            Some(AmountFilter {
+                start_amount: Some(start),
+                end_amount: Some(end),
+            }) => filter.filter(dsl::refund_amount.between(start, end)),
+            Some(AmountFilter {
+                start_amount: Some(start),
+                end_amount: None,
+            }) => filter.filter(dsl::refund_amount.ge(start)),
+            Some(AmountFilter {
+                start_amount: None,
+                end_amount: Some(end),
+            }) => filter.filter(dsl::refund_amount.le(end)),
+            _ => filter,
+        };
+        if let Some(connector) = refund_list_details.connector.clone() {
+            filter = filter.filter(dsl::connector.eq_any(connector));
+        }
+        if let Some(merchant_connector_id) = refund_list_details.merchant_connector_id.clone() {
+            filter = filter.filter(dsl::merchant_connector_id.eq_any(merchant_connector_id));
+        }
+        if let Some(filter_currency) = &refund_list_details.currency {
+            filter = filter.filter(dsl::currency.eq_any(filter_currency.clone()));
+        }
+        if let Some(filter_refund_status) = &refund_list_details.refund_status {
+            filter = filter.filter(dsl::refund_status.eq_any(filter_refund_status.clone()));
+        }
+
+        logger::debug!(query = %diesel::debug_query::<diesel::pg::Pg, _>(&filter).to_string());
+
+        filter
+            .get_result_async::<i64>(conn)
+            .await
+            .change_context(errors::DatabaseError::NotFound)
+            .attach_printable_lazy(|| "Error counting refunds by platform merchant id")
     }
 
     #[cfg(feature = "v1")]

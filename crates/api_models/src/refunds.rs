@@ -518,6 +518,59 @@ pub struct RefundListResponse {
     pub data: Vec<RefundResponse>,
 }
 
+/// Slim, PII-free refund summary returned by the platform-aggregated refund list.
+///
+/// Only contains fields that are safe to share across the platform's view of its
+/// connected merchants. Customer PII, refund reason text, metadata blobs, and raw
+/// connector responses are deliberately excluded.
+#[cfg(feature = "v1")]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, ToSchema)]
+pub struct PlatformRefundListItem {
+    /// Unique identifier for the refund
+    pub refund_id: String,
+    /// The payment id against which the refund is initiated
+    #[schema(value_type = String)]
+    pub payment_id: common_utils::id_type::PaymentId,
+    /// The refund amount in the lowest denomination of the currency
+    #[schema(value_type = i64, example = 6540)]
+    pub amount: MinorUnit,
+    /// The three-letter ISO currency code
+    #[schema(value_type = Currency)]
+    pub currency: enums::Currency,
+    /// The status of the refund
+    pub status: enums::RefundStatus,
+    /// The connector used for the refund
+    #[schema(example = "stripe")]
+    pub connector: String,
+    /// The connected merchant id that owns the refund
+    #[schema(value_type = String, example = "merchant_abcd")]
+    pub connected_merchant_id: common_utils::id_type::MerchantId,
+    /// The business profile id that owns the refund, if available
+    #[schema(value_type = Option<String>)]
+    pub profile_id: Option<common_utils::id_type::ProfileId>,
+    /// The timestamp at which the refund was created
+    #[serde(with = "common_utils::custom_serde::iso8601::option")]
+    pub created_at: Option<PrimitiveDateTime>,
+    /// The timestamp at which the refund was last updated
+    #[serde(with = "common_utils::custom_serde::iso8601::option")]
+    pub updated_at: Option<PrimitiveDateTime>,
+}
+
+/// Platform-aggregated refund list response.
+///
+/// Returned by `GET /refunds/platform/list`, this is a slim view of refund
+/// activity across all of the platform merchant's connected merchants.
+#[cfg(feature = "v1")]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, ToSchema)]
+pub struct PlatformRefundListResponse {
+    /// The number of refunds in the current page
+    pub count: usize,
+    /// The total number of refunds matching the filter
+    pub total_count: i64,
+    /// The slim refund summaries for the platform's connected merchants
+    pub data: Vec<PlatformRefundListItem>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, ToSchema)]
 pub struct RefundListMetaData {
     /// The list of available connector filters
