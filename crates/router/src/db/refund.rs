@@ -2361,14 +2361,15 @@ mod platform_refund_list_tests {
     use diesel_models::{enums as diesel_enums, refund as diesel_refund};
     use hyperswitch_domain_models::refunds::RefundListConstraints;
     use redis_interface::RedisSettings;
-    use time::macros::datetime;
 
     use crate::db::{refund::RefundInterface, MockDb};
 
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     fn merchant_id(s: &str) -> common_utils::id_type::MerchantId {
         common_utils::id_type::MerchantId::try_from(Cow::from(s.to_owned())).unwrap()
     }
 
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     fn payment_id(s: &str) -> common_utils::id_type::PaymentId {
         common_utils::id_type::PaymentId::try_from(Cow::from(s.to_owned())).unwrap()
     }
@@ -2397,8 +2398,8 @@ mod platform_refund_list_tests {
             sent_to_gateway: true,
             metadata: None,
             refund_arn: None,
-            created_at: datetime!(2025-01-01 0:00),
-            modified_at: datetime!(2025-01-01 0:00),
+            created_at: common_utils::date_time::now(),
+            modified_at: common_utils::date_time::now(),
             description: None,
             attempt_id: "attempt".into(),
             refund_reason: None,
@@ -2431,6 +2432,7 @@ mod platform_refund_list_tests {
         }
     }
 
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     async fn make_mockdb() -> MockDb {
         MockDb::new(&RedisSettings::default(), KeyManagerState::mock())
             .await
@@ -2525,7 +2527,7 @@ mod platform_refund_list_tests {
 
         let listed = mockdb
             .filter_refunds_by_platform_merchant_id_for_listing(
-                &[connected_a.clone()],
+                std::slice::from_ref(&connected_a),
                 &empty_constraints(),
                 diesel_enums::MerchantStorageScheme::PostgresOnly,
                 100,
@@ -2534,7 +2536,10 @@ mod platform_refund_list_tests {
             .await
             .unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].refund_id, "ref_a1");
+        assert_eq!(
+            listed.first().expect("expected a refund row").refund_id,
+            "ref_a1"
+        );
     }
 
     /// Status filter on the regular refund list constraints must round-trip
@@ -2581,7 +2586,10 @@ mod platform_refund_list_tests {
             .await
             .unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].refund_id, "ref_b1");
+        assert_eq!(
+            listed.first().expect("expected a refund row").refund_id,
+            "ref_b1"
+        );
     }
 
     /// `limit` and `offset` on the platform filter behave like the regular
@@ -2614,7 +2622,7 @@ mod platform_refund_list_tests {
 
         let page = mockdb
             .filter_refunds_by_platform_merchant_id_for_listing(
-                &[connected_a.clone()],
+                std::slice::from_ref(&connected_a),
                 &empty_constraints(),
                 diesel_enums::MerchantStorageScheme::PostgresOnly,
                 2,
