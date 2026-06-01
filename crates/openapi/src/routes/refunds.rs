@@ -132,6 +132,28 @@ pub async fn refunds_update() {}
 #[cfg(feature = "v1")]
 pub fn refunds_list() {}
 
+/// Refunds - Platform List
+///
+/// Lists refunds for a platform merchant aggregated across all of its connected merchants.
+/// Returns a slim, PII-free view: refund id, payment id, amount, currency, status, connector,
+/// connected merchant id, profile id, and timestamps. Non-platform merchants are rejected
+/// with a structured authorisation error. Supports the standard refund list filters and
+/// pagination via the request body.
+#[utoipa::path(
+    post,
+    path = "/refunds/platform/list",
+    request_body=RefundListRequest,
+    responses(
+        (status = 200, description = "Aggregated platform refund list", body = PlatformRefundListResponse),
+        (status = 401, description = "Caller is not a platform merchant", body = GenericErrorResponseOpenApi),
+    ),
+    tag = "Refunds",
+    operation_id = "List all Refunds for a Platform Merchant",
+    security(("api_key" = []))
+)]
+#[cfg(feature = "v1")]
+pub fn refunds_platform_list() {}
+
 /// Refunds - List For the Given profiles
 ///
 /// Lists all the refunds associated with the merchant or a payment_id if payment_id is not provided

@@ -97,6 +97,34 @@ pub trait RefundInterface {
         offset: i64,
     ) -> CustomResult<Vec<diesel_models::refund::Refund>, errors::StorageError>;
 
+    /// List refunds across all connected merchants belonging to the given
+    /// platform merchant id, applying the same filters as the regular merchant
+    /// refund list.
+    ///
+    /// The caller is responsible for passing the platform merchant id; the
+    /// filter is `refund.merchant_id IN connected_merchant_ids` plus the
+    /// standard list constraints.
+    #[cfg(all(feature = "v1", feature = "olap"))]
+    async fn filter_refunds_by_platform_merchant_id_for_listing(
+        &self,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_details: &refunds::RefundListConstraints,
+        storage_scheme: enums::MerchantStorageScheme,
+        limit: i64,
+        offset: i64,
+    ) -> CustomResult<Vec<diesel_models::refund::Refund>, errors::StorageError>;
+
+    /// Count refunds across all connected merchants belonging to the given
+    /// platform merchant id, applying the same filters as the regular merchant
+    /// refund list.
+    #[cfg(all(feature = "v1", feature = "olap"))]
+    async fn get_total_count_of_refunds_by_platform_merchant_id(
+        &self,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_details: &refunds::RefundListConstraints,
+        storage_scheme: enums::MerchantStorageScheme,
+    ) -> CustomResult<i64, errors::StorageError>;
+
     #[cfg(all(feature = "v1", feature = "olap"))]
     async fn filter_refund_by_meta_constraints(
         &self,
@@ -411,6 +439,46 @@ mod storage {
                 refund_details,
                 limit,
                 offset,
+            )
+            .await
+            .map_err(|error| report!(errors::StorageError::from(error)))
+        }
+
+        #[cfg(all(feature = "v1", feature = "olap"))]
+        #[instrument(skip_all)]
+        async fn filter_refunds_by_platform_merchant_id_for_listing(
+            &self,
+            connected_merchant_ids: &[common_utils::id_type::MerchantId],
+            refund_details: &refunds::RefundListConstraints,
+            _storage_scheme: enums::MerchantStorageScheme,
+            limit: i64,
+            offset: i64,
+        ) -> CustomResult<Vec<diesel_models::refund::Refund>, errors::StorageError> {
+            let conn = connection::pg_connection_read(self).await?;
+            <diesel_models::refund::Refund as storage_types::RefundDbExt>::filter_by_platform_merchant_id(
+                &conn,
+                connected_merchant_ids,
+                refund_details,
+                limit,
+                offset,
+            )
+            .await
+            .map_err(|error| report!(errors::StorageError::from(error)))
+        }
+
+        #[cfg(all(feature = "v1", feature = "olap"))]
+        #[instrument(skip_all)]
+        async fn get_total_count_of_refunds_by_platform_merchant_id(
+            &self,
+            connected_merchant_ids: &[common_utils::id_type::MerchantId],
+            refund_details: &refunds::RefundListConstraints,
+            _storage_scheme: enums::MerchantStorageScheme,
+        ) -> CustomResult<i64, errors::StorageError> {
+            let conn = connection::pg_connection_read(self).await?;
+            <diesel_models::refund::Refund as storage_types::RefundDbExt>::get_refunds_count_by_platform_merchant_id(
+                &conn,
+                connected_merchant_ids,
+                refund_details,
             )
             .await
             .map_err(|error| report!(errors::StorageError::from(error)))
@@ -1200,6 +1268,46 @@ mod storage {
 
         #[cfg(all(feature = "v1", feature = "olap"))]
         #[instrument(skip_all)]
+        async fn filter_refunds_by_platform_merchant_id_for_listing(
+            &self,
+            connected_merchant_ids: &[common_utils::id_type::MerchantId],
+            refund_details: &refunds::RefundListConstraints,
+            _storage_scheme: enums::MerchantStorageScheme,
+            limit: i64,
+            offset: i64,
+        ) -> CustomResult<Vec<diesel_models::refund::Refund>, errors::StorageError> {
+            let conn = connection::pg_connection_read(self).await?;
+            <diesel_models::refund::Refund as storage_types::RefundDbExt>::filter_by_platform_merchant_id(
+                &conn,
+                connected_merchant_ids,
+                refund_details,
+                limit,
+                offset,
+            )
+            .await
+            .map_err(|error| report!(errors::StorageError::from(error)))
+        }
+
+        #[cfg(all(feature = "v1", feature = "olap"))]
+        #[instrument(skip_all)]
+        async fn get_total_count_of_refunds_by_platform_merchant_id(
+            &self,
+            connected_merchant_ids: &[common_utils::id_type::MerchantId],
+            refund_details: &refunds::RefundListConstraints,
+            _storage_scheme: enums::MerchantStorageScheme,
+        ) -> CustomResult<i64, errors::StorageError> {
+            let conn = connection::pg_connection_read(self).await?;
+            <diesel_models::refund::Refund as storage_types::RefundDbExt>::get_refunds_count_by_platform_merchant_id(
+                &conn,
+                connected_merchant_ids,
+                refund_details,
+            )
+            .await
+            .map_err(|error| report!(errors::StorageError::from(error)))
+        }
+
+        #[cfg(all(feature = "v1", feature = "olap"))]
+        #[instrument(skip_all)]
         async fn filter_refund_by_meta_constraints(
             &self,
             processor_merchant_id: &common_utils::id_type::MerchantId,
@@ -1808,6 +1916,134 @@ impl RefundInterface for MockDb {
     }
 
     #[cfg(all(feature = "v1", feature = "olap"))]
+    async fn filter_refunds_by_platform_merchant_id_for_listing(
+        &self,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_details: &refunds::RefundListConstraints,
+        _storage_scheme: enums::MerchantStorageScheme,
+        limit: i64,
+        offset: i64,
+    ) -> CustomResult<Vec<diesel_models::refund::Refund>, errors::StorageError> {
+        let connected: HashSet<&common_utils::id_type::MerchantId> =
+            connected_merchant_ids.iter().collect();
+
+        let mut unique_connectors = HashSet::new();
+        let mut unique_merchant_connector_ids = HashSet::new();
+        let mut unique_currencies = HashSet::new();
+        let mut unique_statuses = HashSet::new();
+        let mut unique_profile_ids = HashSet::new();
+
+        if let Some(connectors) = &refund_details.connector {
+            connectors.iter().for_each(|connector| {
+                unique_connectors.insert(connector);
+            });
+        }
+        if let Some(merchant_connector_ids) = &refund_details.merchant_connector_id {
+            merchant_connector_ids.iter().for_each(|id| {
+                unique_merchant_connector_ids.insert(id);
+            });
+        }
+        if let Some(currencies) = &refund_details.currency {
+            currencies.iter().for_each(|currency| {
+                unique_currencies.insert(currency);
+            });
+        }
+        if let Some(refund_statuses) = &refund_details.refund_status {
+            refund_statuses.iter().for_each(|status| {
+                unique_statuses.insert(status);
+            });
+        }
+        if let Some(profile_id_list) = &refund_details.profile_id {
+            unique_profile_ids = profile_id_list.iter().collect();
+        }
+
+        let refunds = self.refunds.lock().await;
+        let filtered_refunds = refunds
+            .iter()
+            .filter(|refund| connected.contains(&refund.merchant_id))
+            .filter(|refund| {
+                refund_details
+                    .payment_id
+                    .clone()
+                    .is_none_or(|id| id == refund.payment_id)
+            })
+            .filter(|refund| {
+                refund_details
+                    .refund_id
+                    .clone()
+                    .is_none_or(|id| id == refund.refund_id)
+            })
+            .filter(|refund| {
+                unique_profile_ids.is_empty()
+                    || refund
+                        .profile_id
+                        .as_ref()
+                        .is_some_and(|profile_id| unique_profile_ids.contains(profile_id))
+            })
+            .filter(|refund| {
+                refund.created_at
+                    >= refund_details.time_range.map_or(
+                        common_utils::date_time::now() - time::Duration::days(60),
+                        |range| range.start_time,
+                    )
+                    && refund.created_at
+                        <= refund_details
+                            .time_range
+                            .map_or(common_utils::date_time::now(), |range| {
+                                range.end_time.unwrap_or_else(common_utils::date_time::now)
+                            })
+            })
+            .filter(|refund| {
+                refund_details.amount_filter.as_ref().is_none_or(|amount| {
+                    refund.refund_amount >= MinorUnit::new(amount.start_amount.unwrap_or(i64::MIN))
+                        && refund.refund_amount
+                            <= MinorUnit::new(amount.end_amount.unwrap_or(i64::MAX))
+                })
+            })
+            .filter(|refund| {
+                unique_connectors.is_empty() || unique_connectors.contains(&refund.connector)
+            })
+            .filter(|refund| {
+                unique_merchant_connector_ids.is_empty()
+                    || refund
+                        .merchant_connector_id
+                        .as_ref()
+                        .is_some_and(|id| unique_merchant_connector_ids.contains(id))
+            })
+            .filter(|refund| {
+                unique_currencies.is_empty() || unique_currencies.contains(&refund.currency)
+            })
+            .filter(|refund| {
+                unique_statuses.is_empty() || unique_statuses.contains(&refund.refund_status)
+            })
+            .skip(usize::try_from(offset).unwrap_or_default())
+            .take(usize::try_from(limit).unwrap_or(MAX_LIMIT))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        Ok(filtered_refunds)
+    }
+
+    #[cfg(all(feature = "v1", feature = "olap"))]
+    async fn get_total_count_of_refunds_by_platform_merchant_id(
+        &self,
+        connected_merchant_ids: &[common_utils::id_type::MerchantId],
+        refund_details: &refunds::RefundListConstraints,
+        storage_scheme: enums::MerchantStorageScheme,
+    ) -> CustomResult<i64, errors::StorageError> {
+        let rows = self
+            .filter_refunds_by_platform_merchant_id_for_listing(
+                connected_merchant_ids,
+                refund_details,
+                storage_scheme,
+                i64::MAX,
+                0,
+            )
+            .await?;
+        Ok(i64::try_from(rows.len()).unwrap_or(i64::MAX))
+    }
+
+    #[cfg(all(feature = "v1", feature = "olap"))]
     async fn filter_refund_by_meta_constraints(
         &self,
         _processor_merchant_id: &common_utils::id_type::MerchantId,
@@ -2114,5 +2350,378 @@ impl RefundInterface for MockDb {
         let filtered_refunds_count = filtered_refunds.len().try_into().unwrap_or_default();
 
         Ok(filtered_refunds_count)
+    }
+}
+
+#[cfg(all(test, feature = "v1", feature = "olap"))]
+mod platform_refund_list_tests {
+    use std::borrow::Cow;
+
+    use common_utils::types::{keymanager::KeyManagerState, ConnectorTransactionId, MinorUnit};
+    use diesel_models::{enums as diesel_enums, refund as diesel_refund};
+    use hyperswitch_domain_models::refunds::RefundListConstraints;
+    use redis_interface::RedisSettings;
+
+    use crate::db::{refund::RefundInterface, MockDb};
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn merchant_id(s: &str) -> common_utils::id_type::MerchantId {
+        common_utils::id_type::MerchantId::try_from(Cow::from(s.to_owned())).unwrap()
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn payment_id(s: &str) -> common_utils::id_type::PaymentId {
+        common_utils::id_type::PaymentId::try_from(Cow::from(s.to_owned())).unwrap()
+    }
+
+    fn make_refund(
+        merchant: &common_utils::id_type::MerchantId,
+        refund_id: &str,
+        pay_id: &str,
+        amount: i64,
+        status: diesel_enums::RefundStatus,
+    ) -> diesel_refund::RefundNew {
+        diesel_refund::RefundNew {
+            refund_id: refund_id.into(),
+            payment_id: payment_id(pay_id),
+            merchant_id: merchant.clone(),
+            internal_reference_id: format!("internal_{refund_id}"),
+            external_reference_id: None,
+            connector_transaction_id: ConnectorTransactionId::TxnId("ctxn".into()),
+            connector: "stripe".into(),
+            connector_refund_id: None,
+            refund_type: diesel_enums::RefundType::InstantRefund,
+            total_amount: MinorUnit::new(amount),
+            currency: diesel_enums::Currency::USD,
+            refund_amount: MinorUnit::new(amount),
+            refund_status: status,
+            sent_to_gateway: true,
+            metadata: None,
+            refund_arn: None,
+            created_at: common_utils::date_time::now(),
+            modified_at: common_utils::date_time::now(),
+            description: None,
+            attempt_id: "attempt".into(),
+            refund_reason: None,
+            profile_id: None,
+            updated_by: "test".into(),
+            merchant_connector_id: None,
+            charges: None,
+            organization_id: common_utils::id_type::OrganizationId::default(),
+            split_refunds: None,
+            processor_refund_data: None,
+            processor_transaction_data: None,
+            processor_merchant_id: Some(merchant.clone()),
+            created_by: None,
+        }
+    }
+
+    fn empty_constraints() -> RefundListConstraints {
+        RefundListConstraints {
+            payment_id: None,
+            refund_id: None,
+            profile_id: None,
+            limit: None,
+            offset: None,
+            time_range: None,
+            amount_filter: None,
+            connector: None,
+            merchant_connector_id: None,
+            currency: None,
+            refund_status: None,
+        }
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    async fn make_mockdb() -> MockDb {
+        MockDb::new(&RedisSettings::default(), KeyManagerState::mock())
+            .await
+            .expect("Failed to create mock db")
+    }
+
+    /// Aggregated platform list returns refunds across every connected merchant
+    /// in the platform's scope (cross-merchant aggregation).
+    #[tokio::test]
+    async fn platform_list_returns_refunds_across_connected_merchants() {
+        let mockdb = make_mockdb().await;
+        let connected_a = merchant_id("merchant_a");
+        let connected_b = merchant_id("merchant_b");
+        let unrelated = merchant_id("merchant_unrelated");
+
+        for new in [
+            make_refund(
+                &connected_a,
+                "ref_a1",
+                "pay_a1",
+                100,
+                diesel_enums::RefundStatus::Success,
+            ),
+            make_refund(
+                &connected_b,
+                "ref_b1",
+                "pay_b1",
+                200,
+                diesel_enums::RefundStatus::Pending,
+            ),
+            make_refund(
+                &unrelated,
+                "ref_x1",
+                "pay_x1",
+                300,
+                diesel_enums::RefundStatus::Success,
+            ),
+        ] {
+            mockdb
+                .insert_refund(new, diesel_enums::MerchantStorageScheme::PostgresOnly)
+                .await
+                .unwrap();
+        }
+
+        let listed = mockdb
+            .filter_refunds_by_platform_merchant_id_for_listing(
+                &[connected_a.clone(), connected_b.clone()],
+                &empty_constraints(),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+                100,
+                0,
+            )
+            .await
+            .unwrap();
+
+        let refund_ids: Vec<String> = listed.iter().map(|r| r.refund_id.clone()).collect();
+        assert_eq!(refund_ids.len(), 2);
+        assert!(refund_ids.contains(&"ref_a1".to_string()));
+        assert!(refund_ids.contains(&"ref_b1".to_string()));
+        assert!(!refund_ids.contains(&"ref_x1".to_string()));
+    }
+
+    /// Refunds belonging to merchants that are not in the platform's connected
+    /// list must be excluded (cross-merchant isolation).
+    #[tokio::test]
+    async fn platform_list_excludes_unconnected_merchants() {
+        let mockdb = make_mockdb().await;
+        let connected_a = merchant_id("merchant_a");
+        let other_platform_merchant = merchant_id("merchant_other_platform");
+
+        for new in [
+            make_refund(
+                &connected_a,
+                "ref_a1",
+                "pay_a1",
+                100,
+                diesel_enums::RefundStatus::Success,
+            ),
+            make_refund(
+                &other_platform_merchant,
+                "ref_o1",
+                "pay_o1",
+                100,
+                diesel_enums::RefundStatus::Success,
+            ),
+        ] {
+            mockdb
+                .insert_refund(new, diesel_enums::MerchantStorageScheme::PostgresOnly)
+                .await
+                .unwrap();
+        }
+
+        let listed = mockdb
+            .filter_refunds_by_platform_merchant_id_for_listing(
+                std::slice::from_ref(&connected_a),
+                &empty_constraints(),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+                100,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed.first().expect("expected a refund row").refund_id,
+            "ref_a1"
+        );
+    }
+
+    /// Status filter on the regular refund list constraints must round-trip
+    /// through the platform-aggregated filter the same way.
+    #[tokio::test]
+    async fn platform_list_respects_status_filter() {
+        let mockdb = make_mockdb().await;
+        let connected_a = merchant_id("merchant_a");
+        let connected_b = merchant_id("merchant_b");
+
+        for new in [
+            make_refund(
+                &connected_a,
+                "ref_a1",
+                "pay_a1",
+                100,
+                diesel_enums::RefundStatus::Success,
+            ),
+            make_refund(
+                &connected_b,
+                "ref_b1",
+                "pay_b1",
+                200,
+                diesel_enums::RefundStatus::Pending,
+            ),
+        ] {
+            mockdb
+                .insert_refund(new, diesel_enums::MerchantStorageScheme::PostgresOnly)
+                .await
+                .unwrap();
+        }
+
+        let mut constraints = empty_constraints();
+        constraints.refund_status = Some(vec![diesel_enums::RefundStatus::Pending]);
+
+        let listed = mockdb
+            .filter_refunds_by_platform_merchant_id_for_listing(
+                &[connected_a, connected_b],
+                &constraints,
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+                100,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed.first().expect("expected a refund row").refund_id,
+            "ref_b1"
+        );
+    }
+
+    /// `limit` and `offset` on the platform filter behave like the regular
+    /// list filter (pagination round-trip).
+    #[tokio::test]
+    async fn platform_list_paginates() {
+        let mockdb = make_mockdb().await;
+        let connected_a = merchant_id("merchant_a");
+
+        for (i, status) in [
+            diesel_enums::RefundStatus::Success,
+            diesel_enums::RefundStatus::Success,
+            diesel_enums::RefundStatus::Success,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let new = make_refund(
+                &connected_a,
+                &format!("ref_a{i}"),
+                &format!("pay_a{i}"),
+                100,
+                status,
+            );
+            mockdb
+                .insert_refund(new, diesel_enums::MerchantStorageScheme::PostgresOnly)
+                .await
+                .unwrap();
+        }
+
+        let page = mockdb
+            .filter_refunds_by_platform_merchant_id_for_listing(
+                std::slice::from_ref(&connected_a),
+                &empty_constraints(),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+                2,
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+    }
+
+    /// Empty connected-merchant list short-circuits to an empty result and zero
+    /// count without touching the database iteration.
+    #[tokio::test]
+    async fn platform_list_empty_connected_list_returns_empty() {
+        let mockdb = make_mockdb().await;
+        let connected_a = merchant_id("merchant_a");
+        mockdb
+            .insert_refund(
+                make_refund(
+                    &connected_a,
+                    "ref_a1",
+                    "pay_a1",
+                    100,
+                    diesel_enums::RefundStatus::Success,
+                ),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+            )
+            .await
+            .unwrap();
+
+        let listed = mockdb
+            .filter_refunds_by_platform_merchant_id_for_listing(
+                &[],
+                &empty_constraints(),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+                100,
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(listed.is_empty());
+
+        let count = mockdb
+            .get_total_count_of_refunds_by_platform_merchant_id(
+                &[],
+                &empty_constraints(),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    /// Counts must match the listing semantics so that pagination metadata
+    /// stays consistent with the returned rows.
+    #[tokio::test]
+    async fn platform_count_matches_listed_rows() {
+        let mockdb = make_mockdb().await;
+        let connected_a = merchant_id("merchant_a");
+        let connected_b = merchant_id("merchant_b");
+        let unrelated = merchant_id("merchant_unrelated");
+
+        for new in [
+            make_refund(
+                &connected_a,
+                "ref_a1",
+                "pay_a1",
+                100,
+                diesel_enums::RefundStatus::Success,
+            ),
+            make_refund(
+                &connected_b,
+                "ref_b1",
+                "pay_b1",
+                200,
+                diesel_enums::RefundStatus::Pending,
+            ),
+            make_refund(
+                &unrelated,
+                "ref_x1",
+                "pay_x1",
+                300,
+                diesel_enums::RefundStatus::Success,
+            ),
+        ] {
+            mockdb
+                .insert_refund(new, diesel_enums::MerchantStorageScheme::PostgresOnly)
+                .await
+                .unwrap();
+        }
+
+        let count = mockdb
+            .get_total_count_of_refunds_by_platform_merchant_id(
+                &[connected_a, connected_b],
+                &empty_constraints(),
+                diesel_enums::MerchantStorageScheme::PostgresOnly,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }

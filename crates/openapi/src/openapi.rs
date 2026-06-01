@@ -100,6 +100,7 @@ Never share your secret api keys. Keep them guarded and secure.
         routes::refunds::refunds_retrieve,
         routes::refunds::refunds_update,
         routes::refunds::refunds_list,
+        routes::refunds::refunds_platform_list,
 
         // Routes for Organization
         routes::organization::organization_create,
@@ -781,6 +782,8 @@ Never share your secret api keys. Keep them guarded and secure.
         api_models::payment_methods::TokenizePaymentMethodRequest,
         api_models::refunds::RefundListRequest,
         api_models::refunds::RefundListResponse,
+        api_models::refunds::PlatformRefundListItem,
+        api_models::refunds::PlatformRefundListResponse,
         api_models::relay::RelayRequest,
         api_models::relay::RelayResponse,
         api_models::enums::RelayType,
