@@ -1578,10 +1578,11 @@ pub async fn refund_list_for_platform(
     let provider_account = platform.get_provider().get_account();
 
     if !provider_account.is_platform_account() {
-        return Err(report!(errors::ApiErrorResponse::PlatformAccountAuthNotSupported)
-            .attach_printable(
+        return Err(
+            report!(errors::ApiErrorResponse::PlatformAccountAuthNotSupported).attach_printable(
                 "Aggregated platform refund listing is restricted to platform merchants",
-            ));
+            ),
+        );
     }
 
     let db = &*state.store;
